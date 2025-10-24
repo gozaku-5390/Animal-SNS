@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>動物SNSデモ（Firebase版）</title>
+<title>動物SNSデモ（Firebase v12版）</title>
 <style>
   body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: auto; }
   #feed { border: 1px solid #ccc; padding: 10px; min-height: 300px; margin-bottom: 10px; overflow-y: auto; }
@@ -12,7 +12,7 @@
 </head>
 <body>
 
-<h2>動物SNSデモ（Firebase版）</h2>
+<h2>動物SNSデモ（Firebase v12版）</h2>
 <div id="register">
   <input type="text" id="nameInput" placeholder="ユーザー名を入力">
   <button id="registerBtn">登録</button>
@@ -23,84 +23,88 @@
 <input type="text" id="comment" placeholder="コメントを入力">
 <button id="send">送信</button>
 
-<!-- Firebase SDK -->
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script type="module">
+  // ===== Firebase初期化 =====
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+  import { getFirestore, collection, addDoc, getDocs, query, orderBy, onSnapshot, doc, setDoc } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
 
-<script>
-// ===== Firebase設定 =====
-// 自分のFirebaseプロジェクト情報に書き換えてください
-const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  projectId: "YOUR_PROJECT_ID",
-};
-firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
-const auth = firebase.auth();
+  const firebaseConfig = {
+    apiKey: "AIzaSyBFZ1ys81JAynYIcCAWkqDfu4rpMOm7u2A",
+    authDomain: "animal-sns-c4bf0.firebaseapp.com",
+    projectId: "animal-sns-c4bf0",
+    storageBucket: "animal-sns-c4bf0.appspot.com",
+    messagingSenderId: "142723090731",
+    appId: "1:142723090731:web:248c708042ffd2daf7dd6e",
+    measurementId: "G-D3M0TYT3EC"
+  };
 
-// ===== 動物設定 =====
-const animals = ['dog','cat','horse','rabbit'];
-const animalNames = {dog:'犬', cat:'猫', horse:'馬', rabbit:'ウサギ'};
-let myAnimal = null;
-let myName = null;
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
 
-function toAnimalLanguage(text, animal){
-  switch(animal){
-    case 'dog': return 'ワンワンワン';
-    case 'cat': return 'ニャーニャー';
-    case 'horse': return 'ヒヒーンヒヒヒーン';
-    case 'rabbit': return 'ピョンピョン';
-    default: return text;
+  // ===== 動物設定 =====
+  const animals = ['dog','cat','horse','rabbit'];
+  const animalNames = {dog:'犬', cat:'猫', horse:'馬', rabbit:'ウサギ'};
+  let myAnimal = null;
+  let myName = null;
+
+  function toAnimalLanguage(text, animal){
+    switch(animal){
+      case 'dog': return 'ワンワンワン';
+      case 'cat': return 'ニャーニャー';
+      case 'horse': return 'ヒヒーンヒヒヒーン';
+      case 'rabbit': return 'ピョンピョン';
+      default: return text;
+    }
   }
-}
 
-// ===== 登録処理 =====
-document.getElementById('registerBtn').addEventListener('click', async ()=>{
-  const name = document.getElementById('nameInput').value.trim();
-  if(!name){ alert('名前を入力してください'); return; }
+  // ===== 登録処理 =====
+  document.getElementById('registerBtn').addEventListener('click', async ()=>{
+    const name = document.getElementById('nameInput').value.trim();
+    if(!name){ alert('名前を入力してください'); return; }
 
-  const userRef = db.collection('users').doc(name);
-  const doc = await userRef.get();
-  if(doc.exists){ alert('この名前は既に使われています'); return; }
+    const userRef = doc(db, 'users', name);
+    const docSnap = await getDocs(query(collection(db, 'users')));
+    if(docSnap.docs.some(d => d.id === name)){
+      alert('この名前は既に使われています'); return;
+    }
 
-  myAnimal = animals[Math.floor(Math.random()*animals.length)];
-  myName = name;
-  await userRef.set({animal: myAnimal});
-  document.getElementById('status').innerText = `あなたは ${animalNames[myAnimal]} です`;
-  document.getElementById('register').style.display = 'none';
-  startRealtimeFeed();
-});
+    myAnimal = animals[Math.floor(Math.random()*animals.length)];
+    myName = name;
+    await setDoc(userRef, {animal: myAnimal});
 
-// ===== コメント送信 =====
-document.getElementById('send').addEventListener('click', sendComment);
-document.getElementById('comment').addEventListener('keypress', e=>{
-  if(e.key==='Enter') sendComment();
-});
+    document.getElementById('status').innerText = `あなたは ${animalNames[myAnimal]} です`;
+    document.getElementById('register').style.display = 'none';
+    startRealtimeFeed();
+  });
 
-async function sendComment(){
-  const text = document.getElementById('comment').value.trim();
-  if(!text) return;
-  await db.collection('comments').add({userName: myName, animal: myAnimal, text, timestamp: Date.now()});
-  document.getElementById('comment').value = '';
+  // ===== コメント送信 =====
+  document.getElementById('send').addEventListener('click', sendComment);
+  document.getElementById('comment').addEventListener('keypress', e=>{
+    if(e.key==='Enter') sendComment();
+  });
 
-  // 最新50件保持
-  const snapshot = await db.collection('comments').orderBy('timestamp').get();
-  if(snapshot.size > 50){
-    const toDelete = snapshot.docs.slice(0, snapshot.size - 50);
-    toDelete.forEach(doc=>doc.ref.delete());
+  async function sendComment(){
+    const text = document.getElementById('comment').value.trim();
+    if(!text) return;
+    await addDoc(collection(db,'comments'), {userName: myName, animal: myAnimal, text, timestamp: Date.now()});
+    document.getElementById('comment').value = '';
+
+    // 最新50件保持
+    const q = query(collection(db,'comments'), orderBy('timestamp'));
+    const snapshot = await getDocs(q);
+    if(snapshot.size > 50){
+      snapshot.docs.slice(0, snapshot.size - 50).forEach(docSnap => docSnap.ref.delete());
+    }
   }
-}
 
-// ===== リアルタイムフィード =====
-function startRealtimeFeed(){
-  db.collection('comments').orderBy('timestamp')
-    .onSnapshot(snapshot=>{
+  // ===== リアルタイムフィード =====
+  function startRealtimeFeed(){
+    const q = query(collection(db,'comments'), orderBy('timestamp'));
+    onSnapshot(q, snapshot=>{
       const feed = document.getElementById('feed');
       feed.innerHTML = '';
-      snapshot.forEach(doc=>{
-        const data = doc.data();
+      snapshot.forEach(docSnap=>{
+        const data = docSnap.data();
         const displayText = (data.animal === myAnimal) ? data.text : toAnimalLanguage(data.text, data.animal);
         const div = document.createElement('div');
         div.innerText = `${animalNames[data.animal]}(${data.userName}): ${displayText}`;
@@ -108,7 +112,7 @@ function startRealtimeFeed(){
       });
       feed.scrollTop = feed.scrollHeight;
     });
-}
+  }
 </script>
 
 </body>
