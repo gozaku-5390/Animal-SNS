@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>動物SNSデモ（Firebase v12版）</title>
+<title>動物SNSデモ（匿名ログイン版）</title>
 <style>
   body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: auto; }
   #feed { border: 1px solid #ccc; padding: 10px; min-height: 300px; margin-bottom: 10px; overflow-y: auto; }
@@ -12,7 +12,7 @@
 </head>
 <body>
 
-<h2>動物SNSデモ（Firebase v12版）</h2>
+<h2>動物SNSデモ（匿名ログイン版）</h2>
 <div id="register">
   <input type="text" id="nameInput" placeholder="ユーザー名を入力">
   <button id="registerBtn">登録</button>
@@ -27,6 +27,7 @@
   // ===== Firebase初期化 =====
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
   import { getFirestore, collection, addDoc, getDocs, query, orderBy, onSnapshot, doc, setDoc } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyBFZ1ys81JAynYIcCAWkqDfu4rpMOm7u2A",
@@ -40,6 +41,12 @@
 
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
+  const auth = getAuth(app);
+
+  // 匿名ログイン
+  signInAnonymously(auth)
+    .then(() => console.log("匿名ログイン成功"))
+    .catch(err => console.error("匿名ログイン失敗", err));
 
   // ===== 動物設定 =====
   const animals = ['dog','cat','horse','rabbit'];
@@ -62,15 +69,16 @@
     const name = document.getElementById('nameInput').value.trim();
     if(!name){ alert('名前を入力してください'); return; }
 
+    // 名前重複チェック
     const userRef = doc(db, 'users', name);
-    const docSnap = await getDocs(query(collection(db, 'users')));
-    if(docSnap.docs.some(d => d.id === name)){
+    const snapshot = await getDocs(query(collection(db, 'users')));
+    if(snapshot.docs.some(d => d.id === name)){
       alert('この名前は既に使われています'); return;
     }
 
     myAnimal = animals[Math.floor(Math.random()*animals.length)];
     myName = name;
-    await setDoc(userRef, {animal: myAnimal});
+    await setDoc(userRef, {animal: myAnimal, uid: auth.currentUser.uid});
 
     document.getElementById('status').innerText = `あなたは ${animalNames[myAnimal]} です`;
     document.getElementById('register').style.display = 'none';
@@ -84,16 +92,24 @@
   });
 
   async function sendComment(){
+    if(!auth.currentUser) return;
     const text = document.getElementById('comment').value.trim();
     if(!text) return;
-    await addDoc(collection(db,'comments'), {userName: myName, animal: myAnimal, text, timestamp: Date.now()});
+
+    await addDoc(collection(db,'comments'), {
+      userName: myName,
+      animal: myAnimal,
+      text,
+      timestamp: Date.now(),
+      uid: auth.currentUser.uid
+    });
     document.getElementById('comment').value = '';
 
     // 最新50件保持
     const q = query(collection(db,'comments'), orderBy('timestamp'));
-    const snapshot = await getDocs(q);
-    if(snapshot.size > 50){
-      snapshot.docs.slice(0, snapshot.size - 50).forEach(docSnap => docSnap.ref.delete());
+    const snap = await getDocs(q);
+    if(snap.size > 50){
+      snap.docs.slice(0, snap.size - 50).forEach(docSnap => docSnap.ref.delete());
     }
   }
 
