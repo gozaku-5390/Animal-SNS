@@ -1,34 +1,75 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<title>動物SNSデモ（匿名ログイン版）</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>動物SNS（Google認証専用）</title>
 <style>
-  body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: auto; }
-  #feed { border: 1px solid #ccc; padding: 10px; min-height: 300px; margin-bottom: 10px; overflow-y: auto; }
-  #feed div { margin-bottom: 8px; }
-  #comment { width: 80%; }
+  body { font-family: sans-serif; padding: 18px; max-width: 720px; margin: auto; }
+  header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
+  #feed { border:1px solid #ddd; padding:10px; min-height:320px; max-height:60vh; overflow:auto; background:#fafafa; }
+  .row { margin-bottom:8px; }
+  input[type="text"]{ padding:8px; width:60%; }
+  button { padding:8px 10px; }
+  #status { margin-bottom:12px; }
+  .muted { color:#666; font-size:0.9rem; }
 </style>
 </head>
 <body>
 
-<h2>動物SNSデモ（匿名ログイン版）</h2>
-<div id="register">
-  <input type="text" id="nameInput" placeholder="ユーザー名を入力">
-  <button id="registerBtn">登録</button>
+<header>
+  <h2>動物SNS（Google認証専用）</h2>
+  <div>
+    <button id="btnSignIn">Googleでログイン</button>
+    <button id="btnSignOut" style="display:none">サインアウト</button>
+  </div>
+</header>
+
+<div id="status" class="muted">認証待ち：Googleでログインしてください。</div>
+
+<!-- 登録フォーム（ログイン後に表示） -->
+<div id="register" style="display:none" class="row">
+  <input id="nameInput" type="text" placeholder="表示名（ユーザー名）を入力" />
+  <select id="animalSelect">
+    <option value="dog">犬</option>
+    <option value="cat">猫</option>
+    <option value="horse">馬</option>
+    <option value="rabbit">ウサギ</option>
+  </select>
+  <button id="registerBtn">登録（名前確定）</button>
 </div>
 
-<div id="status" style="margin-top:10px;"></div>
-<div id="feed"></div>
-<input type="text" id="comment" placeholder="コメントを入力">
-<button id="send">送信</button>
+<div id="info" class="muted" style="display:none; margin-bottom:8px;">
+  ※閲覧・投稿はログイン＋登録済みユーザーのみ可能です。
+</div>
+
+<div id="feed" aria-live="polite"></div>
+
+<div id="composer" style="display:none; margin-top:10px;">
+  <input id="comment" type="text" placeholder="コメントを入力（Enterで送信）" />
+  <button id="send">送信</button>
+</div>
 
 <script type="module">
-  // ===== Firebase初期化 =====
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
-  import { getFirestore, collection, addDoc, getDocs, query, orderBy, onSnapshot, doc, setDoc } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
-  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
+  /* ==========================================
+     Firebase v12 module版を使用した完成版
+     - Googleログイン必須（未ログインは読めない/書けない）
+     - 名前は users コレクションに documentId = chosenName
+       - 既に同名ドキュメントがいる場合は uid を照合して同一ユーザーのみ許可
+     - comments コレクションに { userName, animal, text, timestamp, uid }
+     - 投稿後に最新50件を超えたら古いものを削除
+     ========================================== */
 
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+  import {
+    getFirestore, collection, addDoc, getDocs, query, orderBy, onSnapshot,
+    doc, getDoc, setDoc, deleteDoc
+  } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+  import {
+    getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+  } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
+
+  // ===== your firebaseConfig (project: animal-sns-c4bf0) =====
   const firebaseConfig = {
     apiKey: "AIzaSyBFZ1ys81JAynYIcCAWkqDfu4rpMOm7u2A",
     authDomain: "animal-sns-c4bf0.firebaseapp.com",
@@ -42,18 +83,29 @@
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
   const auth = getAuth(app);
+  const provider = new GoogleAuthProvider();
 
-  // 匿名ログイン
-  signInAnonymously(auth)
-    .then(() => console.log("匿名ログイン成功"))
-    .catch(err => console.error("匿名ログイン失敗", err));
+  // UI elements
+  const btnSignIn = document.getElementById('btnSignIn');
+  const btnSignOut = document.getElementById('btnSignOut');
+  const statusEl = document.getElementById('status');
+  const registerEl = document.getElementById('register');
+  const registerBtn = document.getElementById('registerBtn');
+  const nameInput = document.getElementById('nameInput');
+  const animalSelect = document.getElementById('animalSelect');
+  const infoEl = document.getElementById('info');
+  const feedEl = document.getElementById('feed');
+  const composer = document.getElementById('composer');
+  const commentInput = document.getElementById('comment');
+  const sendBtn = document.getElementById('send');
 
-  // ===== 動物設定 =====
-  const animals = ['dog','cat','horse','rabbit'];
-  const animalNames = {dog:'犬', cat:'猫', horse:'馬', rabbit:'ウサギ'};
-  let myAnimal = null;
+  // animals
+  const animals = { dog: '犬', cat: '猫', horse: '馬', rabbit: 'ウサギ' };
   let myName = null;
+  let myAnimal = null;
+  let unsubscribeFeed = null;
 
+  // 擬音化
   function toAnimalLanguage(text, animal){
     switch(animal){
       case 'dog': return 'ワンワンワン';
@@ -64,72 +116,182 @@
     }
   }
 
-  // ===== 登録処理 =====
-  document.getElementById('registerBtn').addEventListener('click', async ()=>{
-    const name = document.getElementById('nameInput').value.trim();
-    if(!name){ alert('名前を入力してください'); return; }
+  // サインイン処理
+  btnSignIn.addEventListener('click', async ()=>{
+    try {
+      await signInWithPopup(auth, provider);
+      // onAuthStateChanged が続きの処理を行います
+    } catch (err) {
+      console.error('Googleログイン失敗', err);
+      alert('ログインに失敗しました。コンソールを確認してください。');
+    }
+  });
 
-    // 名前重複チェック
-    const userRef = doc(db, 'users', name);
-    const snapshot = await getDocs(query(collection(db, 'users')));
-    if(snapshot.docs.some(d => d.id === name)){
-      alert('この名前は既に使われています'); return;
+  btnSignOut.addEventListener('click', async ()=>{
+    await signOut(auth);
+  });
+
+  // 登録ボタン（名前決定）
+  registerBtn.addEventListener('click', async ()=>{
+    const displayName = nameInput.value.trim();
+    const animal = animalSelect.value;
+    if(!displayName){ alert('表示名を入力してください'); return; }
+
+    const userDocRef = doc(db, 'users', displayName);
+    const snap = await getDoc(userDocRef);
+    const currentUid = auth.currentUser?.uid;
+    if(!currentUid){
+      alert('認証エラー。再度ログインしてください。'); return;
     }
 
-    myAnimal = animals[Math.floor(Math.random()*animals.length)];
-    myName = name;
-    await setDoc(userRef, {animal: myAnimal, uid: auth.currentUser.uid});
+    if(snap.exists()){
+      const data = snap.data();
+      // 既に同名がいる → uid を照合して同一ユーザーならOK、違うならNG
+      if(data.uid && data.uid === currentUid){
+        // same owner → allow "re-register" (update fields)
+        await setDoc(userDocRef, { animal, uid: currentUid }, { merge: true });
+        myName = displayName; myAnimal = animal;
+        onRegistered();
+      } else {
+        alert('その名前は既に別のユーザーが使っています。別の名前を選んでください。');
+        return;
+      }
+    } else {
+      // 新規作成： uid を記録する（ルールで create を制限する想定）
+      await setDoc(userDocRef, { animal, uid: currentUid });
+      myName = displayName; myAnimal = animal;
+      onRegistered();
+    }
+  });
 
-    document.getElementById('status').innerText = `あなたは ${animalNames[myAnimal]} です`;
-    document.getElementById('register').style.display = 'none';
+  // ログイン状態が変わったら処理（未ログイン時は閲覧不可）
+  onAuthStateChanged(auth, user => {
+    if(user){
+      // ログイン済み
+      statusEl.textContent = `ログイン済み： ${user.displayName || user.email || user.uid}`;
+      btnSignIn.style.display = 'none';
+      btnSignOut.style.display = 'inline-block';
+      registerEl.style.display = 'block';
+      infoEl.style.display = 'block';
+      // If user already had a registered name (optional), we could fetch it here
+    } else {
+      // 未ログイン
+      statusEl.textContent = '認証待ち：Googleでログインしてください。';
+      btnSignIn.style.display = 'inline-block';
+      btnSignOut.style.display = 'none';
+      registerEl.style.display = 'none';
+      infoEl.style.display = 'none';
+      composer.style.display = 'none';
+      feedEl.innerHTML = '<div class="muted">ログインしていないため投稿や閲覧はできません。</div>';
+      myName = null; myAnimal = null;
+      // stop feed listener if exists
+      if(typeof unsubscribeFeed === 'function') unsubscribeFeed();
+      unsubscribeFeed = null;
+    }
+  });
+
+  // ユーザー登録済みになったあとの処理
+  function onRegistered(){
+    statusEl.textContent = `あなたは ${animals[myAnimal]}（${myName}）として登録されました。`;
+    registerEl.style.display = 'none';
+    composer.style.display = 'block';
+    commentInput.focus();
     startRealtimeFeed();
-  });
+  }
 
-  // ===== コメント送信 =====
-  document.getElementById('send').addEventListener('click', sendComment);
-  document.getElementById('comment').addEventListener('keypress', e=>{
-    if(e.key==='Enter') sendComment();
-  });
+  // 投稿
+  sendBtn.addEventListener('click', sendComment);
+  commentInput.addEventListener('keypress', e => { if(e.key === 'Enter') sendComment(); });
 
   async function sendComment(){
-    if(!auth.currentUser) return;
-    const text = document.getElementById('comment').value.trim();
+    if(!auth.currentUser) return alert('ログインしてください');
+    if(!myName){ alert('登録が必要です'); return; }
+    const text = commentInput.value.trim();
     if(!text) return;
-
-    await addDoc(collection(db,'comments'), {
-      userName: myName,
-      animal: myAnimal,
-      text,
-      timestamp: Date.now(),
-      uid: auth.currentUser.uid
-    });
-    document.getElementById('comment').value = '';
-
-    // 最新50件保持
-    const q = query(collection(db,'comments'), orderBy('timestamp'));
-    const snap = await getDocs(q);
-    if(snap.size > 50){
-      snap.docs.slice(0, snap.size - 50).forEach(docSnap => docSnap.ref.delete());
+    try {
+      await addDoc(collection(db, 'comments'), {
+        userName: myName,
+        animal: myAnimal,
+        text,
+        timestamp: Date.now(),
+        uid: auth.currentUser.uid
+      });
+      commentInput.value = '';
+      // 最新50件保持（クライアントで行う）
+      await enforceFiftyLimit();
+    } catch (err) {
+      console.error('コメント送信失敗', err);
+      alert('送信に失敗しました');
     }
   }
 
-  // ===== リアルタイムフィード =====
+  // 最新50件を超えたら古い順から削除
+  async function enforceFiftyLimit(){
+    const q = query(collection(db, 'comments'), orderBy('timestamp'));
+    const snap = await getDocs(q);
+    if(snap.size > 50){
+      const deletions = snap.docs.slice(0, snap.size - 50);
+      for(const d of deletions){
+        try { await deleteDoc(d.ref); } catch(e){ console.warn('削除失敗', e); }
+      }
+    }
+  }
+
+  // フィード開始（認証＋登録済み時に呼ぶ）
   function startRealtimeFeed(){
-    const q = query(collection(db,'comments'), orderBy('timestamp'));
-    onSnapshot(q, snapshot=>{
-      const feed = document.getElementById('feed');
-      feed.innerHTML = '';
-      snapshot.forEach(docSnap=>{
-        const data = docSnap.data();
-        const displayText = (data.animal === myAnimal) ? data.text : toAnimalLanguage(data.text, data.animal);
+    // stop old listener
+    if(typeof unsubscribeFeed === 'function') unsubscribeFeed();
+
+    const q = query(collection(db, 'comments'), orderBy('timestamp'));
+    unsubscribeFeed = onSnapshot(q, snapshot => {
+      // only render if authenticated (rules already enforce reads require auth)
+      if(!auth.currentUser || !myName) {
+        feedEl.innerHTML = '<div class="muted">表示できるのはログイン＋登録済みユーザーのみです。</div>';
+        return;
+      }
+      feedEl.innerHTML = '';
+      snapshot.forEach(docSnap => {
+        const d = docSnap.data();
+        const rawText = d.text || '';
+        const display = (d.animal === myAnimal) ? rawText : toAnimalLanguage(rawText, d.animal);
         const div = document.createElement('div');
-        div.innerText = `${animalNames[data.animal]}(${data.userName}): ${displayText}`;
-        feed.appendChild(div);
+        div.textContent = `${animals[d.animal] || d.animal}（${d.userName}）: ${display}`;
+        feedEl.appendChild(div);
       });
-      feed.scrollTop = feed.scrollHeight;
+      feedEl.scrollTop = feedEl.scrollHeight;
+    }, err => {
+      console.error('フィード取得エラー', err);
+      feedEl.innerHTML = '<div class="muted">フィードの取得に失敗しました（コンソールを確認）。</div>';
     });
   }
-</script>
 
+  // ===== Optional: If user already had a user doc matching Google displayName, auto-fill (not automatic overwrite) =====
+  // (Left out to avoid auto-taking names without explicit user action)
+
+  // ========== Firestore セキュリティルール（コンソールに貼る） ==========
+  /*
+  rules_version = '2';
+  service cloud.firestore {
+    match /databases/{database}/documents {
+
+      // comments: 読み書きはログイン済みのみ、投稿後は編集/削除不可
+      match /comments/{commentId} {
+        allow read, create: if request.auth != null;
+        allow update, delete: if false;
+      }
+
+      // users: create は認証ユーザーのみで、作成時に uid を request に含めることを要求
+      //       既存ドキュメントの uid と一致する場合のみ update/delete を許可
+      match /users/{userId} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null && request.auth.uid == request.resource.data.uid;
+        allow update, delete: if request.auth != null && request.auth.uid == resource.data.uid;
+      }
+    }
+  }
+  */
+  // =====================================================================
+
+</script>
 </body>
 </html>
